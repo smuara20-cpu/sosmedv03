@@ -130,7 +130,19 @@ A['meta-test'] = async () => {
   try { await api('POST', pj('/meta/test'), {}); await App.reload(); toast('Koneksi berhasil dites.'); }
   catch (e) { await App.reload(); const b = $('#tokmsg'); if (b) b.innerHTML = App.metaErr(e); }
 };
-A['meta-del'] = async () => { if (!confirm('Hapus token Meta yang tersimpan? Mode Meta akan dinonaktifkan.')) return; await api('DELETE', pj('/meta')); await App.reload(); toast('Token dihapus.'); };
+A['instagram-connect'] = () => {
+  window.location.href = pj('/instagram/connect');
+};
+A['instagram-del'] = async () => {
+  if (!confirm('Putuskan koneksi Instagram untuk project ini?')) return;
+  try {
+    await api('DELETE', pj('/instagram'));
+    await App.reload();
+    toast('Koneksi Instagram diputuskan.');
+  } catch (e) {
+    toast(e.message, true);
+  }
+};A['meta-del'] = async () => { if (!confirm('Hapus token Meta yang tersimpan? Mode Meta akan dinonaktifkan.')) return; await api('DELETE', pj('/meta')); await App.reload(); toast('Token dihapus.'); };
 A['proj-new'] = () => formModal({ title: 'Tambah project', fields: [{ name: 'brand', label: 'Nama brand', required: true }, { name: 'ig_username', label: 'Username Instagram (tanpa @)' }, { name: 'niche', label: 'Niche' }, { name: 'audience', label: 'Target audiens' }, { name: 'whatsapp_number', label: 'Nomor WhatsApp (opsional)' }], onSubmit: async (o) => { o.dashboard_name = 'Sosmed ' + o.brand; const r = await api('POST', '/api/projects', o); await loadProjects(r.id); toast('Project dibuat dengan data contoh.'); } });
 A['proj-del'] = async () => { if (!confirm('Hapus project ini beserta semua datanya? Tindakan ini tidak bisa dibatalkan.')) return; await api('DELETE', pj('')); await loadProjects(); toast('Project dihapus.'); };
 

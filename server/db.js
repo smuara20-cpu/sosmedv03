@@ -52,6 +52,34 @@ CREATE TABLE IF NOT EXISTS meta_conn (
   page_id TEXT, page_name TEXT, ig_id TEXT, ig_username TEXT, permissions TEXT, checked_at TEXT);
 `);
 
+
+// ---------- Migrasi Instagram OAuth (non-destruktif) ----------
+const metaColumns = new Set(
+  db.prepare('PRAGMA table_info(meta_conn)').all().map((c) => c.name)
+);
+
+if (!metaColumns.has('auth_provider')) {
+  db.exec("ALTER TABLE meta_conn ADD COLUMN auth_provider TEXT NOT NULL DEFAULT 'facebook_login'");
+}
+
+if (!metaColumns.has('token_expires_at')) {
+  db.exec('ALTER TABLE meta_conn ADD COLUMN token_expires_at TEXT');
+}
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS instagram_oauth_states (
+  state_hash TEXT PRIMARY KEY,
+  session_hash TEXT NOT NULL,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  expires_at INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_instagram_oauth_expiry
+  ON instagram_oauth_states(expires_at);
+`);
+// ------------------------------------------------------------
+
 const clean = (a) => a.map((v) => (v === undefined ? null : v));
 module.exports = {
   raw: db,

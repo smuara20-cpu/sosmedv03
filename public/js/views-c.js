@@ -128,20 +128,52 @@ App.metaErr = function (e) {
 };
 App.views.sumber = function () {
   const d = App.state.d, p = d.project, m = p.data_mode, c = d.meta, cn = d.counts;
+  const provider = c.provider || 'facebook_login';
+  const instagram = provider === 'instagram_login';
   const sw = (mode) => m === mode ? '<span class="chip good">Sedang dipakai</span>' : '<button class="btn small" data-act="mode" data-v="' + mode + '">Pakai mode ini</button>';
-  const status = c.status === 'connected' ? '<div class="notice ok"><div><b>Tersambung.</b> Page: ' + esc(c.pageName) + ', Instagram: @' + esc(c.igUsername) + '. Dites ' + esc(fDateTime(c.checkedAt) || '-') + '.<br><span class="small">Izin diberikan: ' + esc((c.permissions || []).join(', ')) + '</span></div></div>' :
-    c.status === 'error' ? '<div class="notice bad"><div><b>' + esc(KIND[c.errorKind] || 'Koneksi bermasalah') + '.</b> ' + esc(c.errorMessage || '') + '<br>' + esc(c.advice || '') + '</div></div>' : '<div class="notice">Meta belum tersambung. Dashboard tetap bisa dipakai dengan mode Demo atau CSV.</div>';
-  return pageHead('Sumber data', 'Pilih asal angka: data contoh, file CSV, atau Meta Insights.', false) + modeNotice() +
-    '<div class="cols2e"><div class="panel"><div class="ph"><h2>Demo ' + modeChip('demo') + '</h2>' + sw('demo') + '</div><p class="small">Data contoh (' + (cn.demo || 0) + ' posting) untuk mencoba semua fitur. Semua angka fiktif.</p><button class="btn small" data-act="demo-reset">Reset data contoh</button></div>' +
-    '<div class="panel"><div class="ph"><h2>Impor CSV ' + modeChip('csv') + '</h2>' + sw('csv') + '</div><p class="small">' + (cn.csv || 0) + ' posting dari CSV tersimpan. Kolom: <code>' + esc(Calc.TEMPLATE_COLS.join(',')) + '</code> (opsional <code>url</code>). Tanggal YYYY-MM-DD. Sel kosong = data belum tersedia; 0 = nol.</p>' +
-    '<div class="toolbar"><input type="file" id="csvfile" accept=".csv,text/csv" aria-label="Pilih file CSV"><button class="btn primary" data-act="csv-import">Impor</button></div><label class="small"><input type="checkbox" id="csvreplace"> Ganti semua data CSV sebelumnya</label><div id="importmsg" style="margin-top:8px"></div>' +
-    '<div class="toolbar" style="margin-top:8px"><a class="btn small" href="/api/template.csv">Unduh template CSV</a>' + (cn.csv ? '<button class="btn small danger" data-act="csv-clear">Hapus data CSV</button>' : '') + '</div></div></div>' +
-    '<div class="panel"><div class="ph"><h2>Instagram Insights ' + modeChip('meta') + '</h2>' + (c.status === 'connected' ? sw('meta') : '') + '</div>' + status +
-    '<form id="tokenform" class="form" style="max-width:560px"><div class="field"><label for="tok">Facebook User Access Token</label><input id="tok" name="token" type="password" autocomplete="off" spellcheck="false" placeholder="Tempel token dari Graph API Explorer"><div class="hint">Token dikirim ke server, dienkripsi (AES-256-GCM), dan tidak pernah dikembalikan ke browser. Jangan tempel token di chat atau file CSV.</div></div><div id="tokmsg"></div>' +
-    '<div class="toolbar"><button class="btn primary" type="submit">' + (c.hasToken ? 'Sambungkan ulang dengan token baru' : 'Simpan dan tes koneksi') + '</button>' + (c.hasToken ? '<button class="btn" type="button" data-act="meta-test">Tes koneksi</button><button class="btn danger" type="button" data-act="meta-del">Hapus token</button>' : '') + '</div></form>' +
-    '<p class="small muted" style="margin-top:8px">Dashboard ini mencari akun <b>@' + esc(p.ig_username || '(isi di Pengaturan)') + '</b> di Page yang terlihat oleh token.</p></div>' +
-    '<div class="panel"><div class="ph"><h2>Panduan setup Meta</h2></div>' + guide() + '</div>' +
-    '<div class="panel"><div class="ph"><h2>Di mana data disimpan</h2></div><ul class="small"><li><b>Di server (database SQLite, per akun login):</b> posting, snapshot followers, watchlist, bank ide, kalender, eksperimen, kampanye, inquiry, dan token Meta terenkripsi.</li><li><b>Hanya di browser:</b> tidak ada data bisnis. Browser hanya menyimpan cookie sesi login dan pilihan project terakhir.</li><li>Pilihan mode dan pengaturan project juga tersimpan di server.</li></ul></div>';
+
+  const status = c.status === 'connected'
+    ? '<div class="notice ok"><div><b>Instagram tersambung.</b> @' + esc(c.igUsername || p.ig_username || '-') +
+      '<br><span class="small">Metode: ' + (instagram ? 'Instagram Login' : 'Facebook Login') +
+      ' · Dites: ' + esc(fDateTime(c.checkedAt) || '-') +
+      (c.tokenExpiresAt ? ' · Token berakhir: ' + esc(fDateTime(c.tokenExpiresAt)) : '') +
+      '</span></div></div>'
+    : c.status === 'error'
+      ? '<div class="notice bad"><div><b>' + esc(KIND[c.errorKind] || 'Koneksi bermasalah') +
+        '.</b> ' + esc(c.errorMessage || '') + '<br>' + esc(c.advice || '') + '</div></div>'
+      : '<div class="notice">Instagram belum tersambung. Dashboard tetap dapat digunakan dengan mode Demo atau CSV.</div>';
+
+  return pageHead('Sumber data', 'Hubungkan Instagram Professional atau gunakan data Demo dan CSV.', false) + modeNotice() +
+    '<div class="cols2e">' +
+      '<div class="panel"><div class="ph"><h2>Demo ' + modeChip('demo') + '</h2>' + sw('demo') + '</div><p class="small">Data contoh (' + (cn.demo || 0) + ' posting). Semua angka fiktif.</p><button class="btn small" data-act="demo-reset">Reset data contoh</button></div>' +
+      '<div class="panel"><div class="ph"><h2>Impor CSV ' + modeChip('csv') + '</h2>' + sw('csv') + '</div><p class="small">' + (cn.csv || 0) + ' posting dari CSV tersimpan. Kolom: <code>' + esc(Calc.TEMPLATE_COLS.join(',')) + '</code>. Sel kosong = data belum tersedia; 0 = nol.</p>' +
+      '<div class="toolbar"><input type="file" id="csvfile" accept=".csv,text/csv" aria-label="Pilih file CSV"><button class="btn primary" data-act="csv-import">Impor</button></div><label class="small"><input type="checkbox" id="csvreplace"> Ganti semua data CSV sebelumnya</label><div id="importmsg" style="margin-top:8px"></div>' +
+      '<div class="toolbar" style="margin-top:8px"><a class="btn small" href="/api/template.csv">Unduh template CSV</a>' + (cn.csv ? '<button class="btn small danger" data-act="csv-clear">Hapus data CSV</button>' : '') + '</div></div></div>' +
+
+    '<div class="panel"><div class="ph"><h2>Instagram Professional ' + modeChip('meta') + '</h2>' + (c.status === 'connected' ? sw('meta') : '') + '</div>' +
+      status +
+      '<div class="toolbar" style="margin-top:14px"><button class="btn primary" data-act="instagram-connect">' +
+        (instagram && c.hasToken ? 'Hubungkan ulang Instagram' : 'Hubungkan Instagram') +
+      '</button>' +
+      (instagram && c.hasToken ? '<button class="btn danger" data-act="instagram-del">Putuskan koneksi</button>' : '') +
+      '</div>' +
+      '<p class="small muted">Login resmi Instagram. Anda akan diarahkan ke Instagram untuk memberikan izin. Token disimpan terenkripsi di server dan tidak dikirim ke browser.</p>' +
+      '<p class="small">Akun target: <b>@' + esc(p.ig_username || 'konsultanventour.toro') + '</b></p>' +
+    '</div>' +
+
+    '<details class="panel" style="margin-top:14px"><summary><b>Konektor lama: Facebook Login (opsional)</b></summary>' +
+      '<p class="small muted">Gunakan hanya jika memang ingin memakai alur Facebook Login dan token Graph API Explorer.</p>' +
+      '<form id="tokenform" class="form" style="max-width:560px"><div class="field"><label for="tok">Facebook User Access Token</label><input id="tok" name="token" type="password" autocomplete="off" spellcheck="false" placeholder="Tempel token Facebook Login"><div class="hint">Token dienkripsi di server. Jangan tempel token di chat.</div></div><div id="tokmsg"></div>' +
+      '<div class="toolbar"><button class="btn" type="submit">Simpan token Facebook</button>' +
+      (c.hasToken && !instagram ? '<button class="btn" type="button" data-act="meta-test">Tes Facebook Login</button><button class="btn danger" type="button" data-act="meta-del">Hapus token Facebook</button>' : '') +
+      '</div></form>' +
+    '</details>' +
+
+    '<div class="panel"><div class="ph"><h2>Panduan koneksi Instagram Login</h2></div>' +
+      '<ol class="small"><li>Pastikan akun Instagram menggunakan tipe Professional (Business atau Creator).</li><li>App Meta harus memiliki use case Instagram API / Instagram Login yang sesuai.</li><li>Tambahkan Redirect URI yang sama persis dengan nilai <code>INSTAGRAM_REDIRECT_URI</code> di server.</li><li>Tambahkan akun Instagram sebagai tester bila App masih dalam Development Mode, lalu terima undangannya.</li><li>Klik Hubungkan Instagram dan setujui izin yang diminta.</li></ol>' +
+    '</div>' +
+
+    '<div class="panel"><div class="ph"><h2>Di mana data disimpan</h2></div><ul class="small"><li><b>Server:</b> posting, snapshot, watchlist, ide, kalender, eksperimen, kampanye, inquiry, dan token terenkripsi.</li><li><b>Browser:</b> cookie sesi login dan pilihan project terakhir.</li><li>Mode Demo, CSV, dan Meta tetap dibedakan agar angka contoh tidak tercampur dengan data akun.</li></ul></div>';
 };
 function guide() {
   const g = (t, body) => '<details class="guide"><summary>' + t + '</summary>' + body + '</details>';

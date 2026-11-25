@@ -4,8 +4,10 @@ const path = require('path');
 const db = require('./db');
 const { encrypt, decrypt } = require('./crypto');
 const Meta = require('./meta');
+const Instagram = require('./instagram');
 const demo = require('./demo');
 const Calc = require('../shared/calc');
+try { require('node:process').loadEnvFile(path.join(__dirname, '..', '.env')); } catch (e) { if (e.code !== 'ENOENT') throw e; }
 
 const app = express();
 app.disable('x-powered-by');
@@ -165,7 +167,7 @@ const pub = (p) => ({ id: p.id, dashboard_name: p.dashboard_name, brand: p.brand
   timezone: p.timezone, whatsapp_number: p.whatsapp_number, keywords: JSON.parse(p.keywords || '[]'), data_mode: p.data_mode, last_sync: JSON.parse(p.last_sync || '{}') });
 function connPublic(pid) {
   const c = db.get('SELECT * FROM meta_conn WHERE project_id=?', pid) || {};
-  return { hasToken: !!c.token_enc, status: c.status || 'belum', errorKind: c.error_kind || null, errorMessage: c.error_message || null,
+  return { hasToken: !!c.token_enc, provider: c.auth_provider || 'facebook_login', tokenExpiresAt: c.token_expires_at || null, status: c.status || 'belum', errorKind: c.error_kind || null, errorMessage: c.error_message || null,
     advice: c.error_kind ? Meta.advice(c.error_kind) : null, pageName: c.page_name || null, igUsername: c.ig_username || null,
     permissions: c.permissions ? JSON.parse(c.permissions) : [], checkedAt: c.checked_at || null, requiredPermissions: Meta.REQUIRED_PERMS };
 }
@@ -354,6 +356,34 @@ async function verifyAndStore(project, token, saveToken) {
     saveToken ? encrypt(token) : db.get('SELECT token_enc FROM meta_conn WHERE project_id=?', project.id).token_enc,
     v.pageId, v.pageName, v.igId, v.igUsername, JSON.stringify(v.granted), new Date().toISOString(), project.id);
 }
+/* INSTAGRAM_OAUTH_CONNECT_ROUTE */
+app.get(P + '/instagram/connect', auth, owned, wrap(async (req, res) => {
+  const sid = cookies(req).sid;
+  if (!sid) throw new HttpError(401, 'Sesi login tidak ditemukan. Silakan login ulang.');
+
+  const state = crypto.randomBytes(32).toString('hex');
+  const expiresAt = Date.now() + 10 * 60 * 1000;
+
+  db.run(
+    'DELETE FROM instagram_oauth_states WHERE expires_at < ?',
+    Date.now()
+  );
+
+  db.run(
+    'INSERT INTO instagram_oauth_states (state_hash,session_hash,user_id,project_id,expires_at) VALUES (?,?,?,?,?)',
+    sha(state), sha(sid), req.user.id, req.project.id, expiresAt
+  );
+
+  let target;
+  try {
+    target = Instagram.authorizeUrl(state);
+  } catch (e) {
+    db.run('DELETE FROM instagram_oauth_states WHERE state_hash=?', sha(state));
+    throw bad(e.message || 'Konfigurasi Instagram belum siap.');
+  }
+
+  res.redirect(302, target);
+}));
 app.post(P + '/meta/token', auth, owned, wrap(async (req, res) => {
   const token = String(req.body.token || '').trim();
   if (token.length < 20 || /\s/.test(token)) throw bad('Token tidak terlihat valid. Tempel User Access Token utuh dari Graph API Explorer.');
@@ -361,10 +391,33 @@ app.post(P + '/meta/token', auth, owned, wrap(async (req, res) => {
   catch (e) { if (!(e instanceof Meta.MetaError)) throw e; metaFail(res, e, token); }
 }));
 app.post(P + '/meta/test', auth, owned, wrap(async (req, res) => {
+  const current = db.get('SELECT auth_provider FROM meta_conn WHERE project_id=?', req.project.id);
+  if (current && current.auth_provider === 'instagram_login') throw bad('Koneksi menggunakan Instagram Login. Gunakan status koneksi Instagram, bukan tes Facebook Login.');
   const { token } = getToken(req.project.id);
   try { await verifyAndStore(req.project, token, false); res.json({ ok: true, meta: connPublic(req.project.id) }); }
   catch (e) { if (!(e instanceof Meta.MetaError)) throw e; failConn(req.project.id, e); metaFail(res, e, token); }
 }));
+/* INSTAGRAM_OAUTH_DISCONNECT_ROUTE */
+app.delete(P + '/instagram', auth, owned, (req, res) => {
+  db.run(
+    `UPDATE meta_conn
+     SET token_enc=NULL, status='belum',
+         auth_provider='facebook_login', token_expires_at=NULL,
+         error_kind=NULL, error_message=NULL,
+         page_id=NULL, page_name=NULL, ig_id=NULL,
+         ig_username=NULL, permissions=NULL, checked_at=NULL
+     WHERE project_id=?`,
+    req.project.id
+  );
+
+  db.run('DELETE FROM instagram_oauth_states WHERE project_id=?', req.project.id);
+
+  if (req.project.data_mode === 'meta') {
+    db.run("UPDATE projects SET data_mode='demo' WHERE id=?", req.project.id);
+  }
+
+  res.json({ ok: true });
+});
 app.delete(P + '/meta', auth, owned, (req, res) => {
   db.run("UPDATE meta_conn SET token_enc=NULL,status='belum',error_kind=NULL,error_message=NULL,page_id=NULL,page_name=NULL,ig_id=NULL,ig_username=NULL,permissions=NULL,checked_at=NULL WHERE project_id=?", req.project.id);
   if (req.project.data_mode === 'meta') db.run("UPDATE projects SET data_mode='demo' WHERE id=?", req.project.id);
@@ -410,6 +463,97 @@ app.post(P + '/watchlist/refresh', auth, owned, wrap(async (req, res) => {
   } catch (e) { if (!(e instanceof Meta.MetaError)) throw e; failConn(p.id, e); metaFail(res, e, token); }
 }));
 
+/* INSTAGRAM_OAUTH_CALLBACK_ROUTE */
+app.get('/auth/instagram/callback', wrap(async (req, res) => {
+  const fail = (message) => res.redirect('/?instagram=error&reason=' + encodeURIComponent(message) + '#/sumber');
+
+  if (req.query.error) {
+    return fail('Persetujuan Instagram dibatalkan atau ditolak.');
+  }
+
+  const state = String(req.query.state || '');
+  const code = String(req.query.code || '');
+  if (!/^[a-f0-9]{64}$/i.test(state) || !code) {
+    return fail('Callback Instagram tidak lengkap. Silakan ulangi proses koneksi.');
+  }
+
+  const sid = cookies(req).sid;
+  if (!sid) return fail('Sesi login berakhir. Login kembali lalu hubungkan Instagram.');
+
+  const user = sessionUser(req);
+  if (!user) return fail('Sesi login tidak valid. Login kembali.');
+
+  const stateHash = sha(state);
+  const sessionHash = sha(sid);
+
+  let record = null;
+  db.tx(() => {
+    const row = db.get(
+      'SELECT * FROM instagram_oauth_states WHERE state_hash=?',
+      stateHash
+    );
+
+    if (!row) return;
+    if (row.session_hash !== sessionHash) return;
+    if (row.user_id !== user.id || row.expires_at < Date.now()) return;
+
+    const project = db.get(
+      'SELECT id FROM projects WHERE id=? AND user_id=?',
+      row.project_id, user.id
+    );
+    if (!project) return;
+
+    record = row;
+    db.run('DELETE FROM instagram_oauth_states WHERE state_hash=?', stateHash);
+  });
+
+  if (!record) {
+    return fail('State OAuth tidak valid, kedaluwarsa, atau sudah digunakan. Ulangi koneksi.');
+  }
+
+  try {
+    const exchanged = await Instagram.exchangeCode(code);
+    const profile = await Instagram.fetchProfile(exchanged.accessToken);
+
+    const expiry = exchanged.expiresIn
+      ? new Date(Date.now() + exchanged.expiresIn * 1000).toISOString()
+      : null;
+
+    db.run(
+      `UPDATE meta_conn
+       SET token_enc=?, status='connected',
+           auth_provider='instagram_login',
+           token_expires_at=?,
+           error_kind=NULL, error_message=NULL,
+           page_id=NULL, page_name=NULL,
+           ig_id=?, ig_username=?, permissions=?, checked_at=?
+       WHERE project_id=?`,
+      encrypt(exchanged.accessToken),
+      expiry,
+      profile.id,
+      profile.username,
+      JSON.stringify(Instagram.config().scopes),
+      new Date().toISOString(),
+      record.project_id
+    );
+
+    res.redirect('/?instagram=connected#/sumber');
+  } catch (e) {
+    const safeMessage = e instanceof Instagram.InstagramError
+      ? e.message
+      : 'Instagram gagal menyelesaikan proses OAuth.';
+
+    db.run(
+      "UPDATE meta_conn SET status='error', error_kind=?, error_message=?, checked_at=? WHERE project_id=?",
+      e.kind || 'oauth',
+      safeMessage.slice(0, 500),
+      new Date().toISOString(),
+      record.project_id
+    );
+
+    return fail(safeMessage);
+  }
+}));
 // ---------- Trending Now Indonesia (Google Trends RSS) ----------
 let trendCache = { at: 0, items: null };
 const decodeXml = (s) => s.replace(/<!\[CDATA\[|\]\]>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").trim();
